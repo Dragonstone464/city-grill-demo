@@ -33,6 +33,9 @@ export default function Home() {
   const [payment, setPayment] = useState("Barzahlung bei Abholung");
   const [customer, setCustomer] = useState({ name: "", phone: "", address: "", note: "" });
   const [success, setSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
 
   const filtered = useMemo(() => category === "Alle" ? menu : menu.filter(x => x.category === category), [category]);
@@ -49,10 +52,57 @@ export default function Home() {
   function changeQty(id: number, delta: number) {
     setCart(prev => prev.map(x => x.item.id === id ? { ...x, qty: x.qty + delta } : x).filter(x => x.qty > 0));
   }
-  function submitDemo() {
-    if (!customer.name.trim() || !customer.phone.trim() || (fulfillment === "delivery" && !customer.address.trim())) return;
-    setSuccess(true);
-    setCart([]);
+  async function submitDemo() {
+    if (submitting || cart.length === 0) return;
+
+    if (
+      !customer.name.trim() ||
+      !customer.phone.trim() ||
+      (fulfillment === "delivery" && !customer.address.trim())
+    ) {
+      setOrderError("Bitte fülle alle Pflichtfelder aus.");
+      return;
+    }
+
+    setSubmitting(true);
+    setOrderError("");
+
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer_name: customer.name.trim(),
+          customer_phone: customer.phone.trim(),
+          order_type: fulfillment,
+          delivery_address: fulfillment === "delivery" ? customer.address.trim() : null,
+          total,
+          items: cart.map(({ item, qty }) => ({
+            name: item.name,
+            quantity: qty,
+            price: item.price,
+          })),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Bestellung konnte nicht gespeichert werden.");
+      }
+
+      setOrderId(result.order_id || "");
+      setSuccess(true);
+      setCart([]);
+    } catch (error) {
+      setOrderError(
+        error instanceof Error
+          ? error.message
+          : "Verbindungsfehler. Bitte versuche es erneut."
+      );
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -106,7 +156,7 @@ export default function Home() {
         </>}</aside></div>}
 
       {checkoutOpen && <div className="overlay" onClick={() => setCheckoutOpen(false)}><section className="checkout-modal" onClick={e => e.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow dark">FAST GESCHAFFT</span><h2>Deine Bestellung</h2></div><button className="icon-button" onClick={() => setCheckoutOpen(false)}><X/></button></div>
-        {success ? <div className="success"><CheckCircle2 size={48}/><h2>Demo-Bestellung erstellt!</h2><p>Das war eine Simulation. Es wurde keine Bestellung an das Restaurant gesendet und keine Zahlung ausgelöst.</p><button className="primary-button" onClick={() => {setSuccess(false);setCheckoutOpen(false);setCustomer({name:"",phone:"",address:"",note:""})}}>Zurück zur Webseite</button></div> : <div className="checkout-content">
+        {success ? <div className="success"><CheckCircle2 size={48}/><h2>Bestellung gespeichert!</h2><p>Deine Bestellung wurde erfolgreich übermittelt. Bestellnummer: {orderId}</p><button className="primary-button" onClick={() => {setSuccess(false);setCheckoutOpen(false);setOrderId("");setOrderError("");setCustomer({name:"",phone:"",address:"",note:""})}}>Zurück zur Webseite</button></div> : <div className="checkout-content">
           <div className="fulfillment"><button className={fulfillment === "pickup" ? "selected" : ""} onClick={() => setFulfillment("pickup")}><Store/> Abholung</button><button className={fulfillment === "delivery" ? "selected" : ""} onClick={() => setFulfillment("delivery")}><Bike/> Lieferung</button></div>
           <label>Dein Name<input value={customer.name} onChange={e => setCustomer({...customer,name:e.target.value})} placeholder="Vor- und Nachname"/></label>
           <label>Telefonnummer<input value={customer.phone} onChange={e => setCustomer({...customer,phone:e.target.value})} placeholder="Für Rückfragen"/></label>
@@ -114,8 +164,11 @@ export default function Home() {
           <label>Hinweis zur Bestellung (optional)<textarea value={customer.note} onChange={e => setCustomer({...customer,note:e.target.value})} placeholder="z. B. bitte klingeln"/></label>
           <label>Zahlungsart<select value={payment} onChange={e => setPayment(e.target.value)}><option>Barzahlung bei Abholung</option><option>Barzahlung bei Lieferung</option><option>Online-Zahlung (nur Demo)</option></select></label>
           <div className="checkout-total"><span>Gesamtbetrag (Demo)</span><b>{euro(total)}</b></div>
-          <button className="primary-button full" onClick={submitDemo}>Demo-Bestellung testen <ArrowRight size={17}/></button>
-          <p className="legal-note">Durch Klicken wird ausschließlich eine lokale Demo-Bestätigung angezeigt. Keine echte Bestellung, keine Zahlung.</p>
+          {orderError && <p role="alert" className="legal-note">{orderError}</p>}
+          <button className="primary-button full" onClick={submitDemo} disabled={submitting}>
+            {submitting ? "Wird gesendet..." : "Bestellung abschicken"} <ArrowRight size={17}/>
+          </button>
+          <p className="legal-note">Die Bestellung wird an das Bestellsystem übermittelt. Eine Online-Zahlung ist noch nicht eingerichtet.</p>
         </div>}
       </section></div>}
     </main>
