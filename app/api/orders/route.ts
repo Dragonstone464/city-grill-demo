@@ -1,5 +1,11 @@
 
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export async function POST(request: Request) {
   try {
@@ -17,119 +23,65 @@ export async function POST(request: Request) {
     if (
       !customer_name ||
       !customer_phone ||
-      !order_type ||
+      !["pickup", "delivery"].includes(order_type) ||
       !Array.isArray(items) ||
       items.length === 0 ||
       !Number.isFinite(Number(total)) ||
       Number(total) <= 0
     ) {
       return NextResponse.json(
-        { error: "Ungültige Bestelldaten." },
+        { error: "Ungültige Bestelldaten" },
         { status: 400 }
       );
     }
 
-    if (
-      items.some(
-        (item: any) =>
-          !item.product_name ||
-          !Number.isInteger(Number(item.quantity)) ||
-          Number(item.quantity) <= 0 ||
-          !Number.isFinite(Number(item.unit_price)) ||
-          Number(item.unit_price) < 0
-      )
-    ) {
+    if (order_type === "delivery" && !delivery_address) {
       return NextResponse.json(
-        { error: "Ungültige Produktdaten." },
+        { error: "Lieferadresse fehlt" },
         { status: 400 }
       );
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const secretKey = process.env.SUPABASE_SECRET_KEY;
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert({
+        customer_name,
+        customer_phone,
+        order_type,
+        delivery_address: delivery_address || null,
+        status: "new",
+        total: Number(total),
+      })
+      .select("id")
+      .single();
 
-    if (!supabaseUrl || !secretKey) {
-      throw new Error("Supabase-Konfiguration fehlt.");
-    }
+    if (orderError) throw orderError;
 
-    const headers = {
-      apikey: secretKey,
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
-    };
+    const orderItems = items.map((item: any) => ({
+      order_id: order.id,
+      product_name: String(item.name),
+      quantity: Number(item.quantity),
+      unit_price: Number(item.price),
+    }));
 
-    // Bestellung speichern
-    const orderResponse = await fetch(
-      `${supabaseUrl}/rest/v1/orders`,
-      {
-        method: "POST",
-        headers: {
-          ...headers,
-          Prefer: "return=representation",
-        },
-        body: JSON.stringify({
-          customer_name,
-          customer_phone,
-          order_type,
-          delivery_address: delivery_address || null,
-          status: "new",
-          total: Number(total),
-        }),
-        cache: "no-store",
-      }
-    );
+    const { error: itemsError } = await supabase
+      .from("order_items")
+      .insert(orderItems);
 
-    if (!orderResponse.ok) {
-      throw new Error(await orderResponse.text());
-    }
-
-    const [order] = await orderResponse.json();
-
-    // Produkte speichern
-    const itemsResponse = await fetch(
-      `${supabaseUrl}/rest/v1/order_items`,
-      {
-        method: "POST",
-        headers: {
-          ...headers,
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(
-          items.map((item: any) => ({
-            order_id: order.id,
-            product_name: item.product_name,
-            quantity: Number(item.quantity),
-            unit_price: Number(item.unit_price),
-          }))
-        ),
-        cache: "no-store",
-      }
-    );
-
-    if (!itemsResponse.ok) {
-      // Unvollständige Bestellung entfernen
-      await fetch(
-        `${supabaseUrl}/rest/v1/orders?id=eq.${order.id}`,
-        {
-          method: "DELETE",
-          headers,
-          cache: "no-store",
-        }
-      );
-
-      throw new Error(await itemsResponse.text());
+    if (itemsError) {
+      await supabase.from("orders").delete().eq("id", order.id);
+      throw itemsError;
     }
 
     return NextResponse.json({
       success: true,
       order_id: order.id,
-      message: "Bestellung erfolgreich gespeichert.",
     });
   } catch (error) {
     console.error("Order API error:", error);
 
     return NextResponse.json(
-      { error: "Bestellung konnte nicht gespeichert werden." },
+      { error: "Bestellung konnte nicht gespeichert werden" },
       { status: 500 }
     );
   }
