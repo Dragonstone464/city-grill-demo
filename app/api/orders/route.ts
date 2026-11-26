@@ -49,7 +49,7 @@ export async function POST(request: Request) {
         customer_phone,
         order_type,
         delivery_address: delivery_address || null,
-        status: "new",
+        status: "pending",
         total: Number(total),
       })
       .select("id")
